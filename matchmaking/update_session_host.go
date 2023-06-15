@@ -1,38 +1,41 @@
 package matchmaking
 
 import (
+	"strconv"
+	"time"
+
 	nex "github.com/PretendoNetwork/nex-go"
-	nexproto "github.com/PretendoNetwork/nex-protocols-go"
-	"fmt"
-	"encoding/hex"
+	match_making "github.com/PretendoNetwork/nex-protocols-go/match-making"
+	"github.com/PretendoNetwork/nex-protocols-go/notifications"
 )
 
 func updateSessionHost(err error, client *nex.Client, callID uint32, gid uint32) {
+	server := commonMatchMakingProtocol.server
 	missingHandler := false
-	if (UpdateRoomHostHandler == nil){
+	if commonMatchMakingProtocol.UpdateRoomHostHandler == nil {
 		logger.Warning("MatchMaking::UpdateSessionHostV1 missing UpdateRoomHostHandler!")
 		missingHandler = true
 	}
-	if (missingHandler){
+	if missingHandler {
 		return
 	}
-	UpdateRoomHostHandler(gid, client.PID())
+	commonMatchMakingProtocol.UpdateRoomHostHandler(gid, client.PID())
 
-	rmcResponse := nex.NewRMCResponse(nexproto.MatchMakingProtocolID, callID)
-	rmcResponse.SetSuccess(nexproto.MatchMakingMethodUpdateSessionHost, nil)
+	rmcResponse := nex.NewRMCResponse(match_making.ProtocolID, callID)
+	rmcResponse.SetSuccess(match_making.MethodUpdateSessionHost, nil)
 
 	rmcResponseBytes := rmcResponse.Bytes()
 
 	var responsePacket nex.PacketInterface
 
-	if(server.PrudpVersion() == 0){
+	if server.PRUDPVersion() == 0 {
 		responsePacket, _ = nex.NewPacketV0(client, nil)
 		responsePacket.SetVersion(0)
-	}else{
+	} else {
 		responsePacket, _ = nex.NewPacketV1(client, nil)
 		responsePacket.SetVersion(1)
 	}
-	
+
 	responsePacket.SetSource(0xA1)
 	responsePacket.SetDestination(0xAF)
 	responsePacket.SetType(nex.DataPacket)
@@ -42,37 +45,42 @@ func updateSessionHost(err error, client *nex.Client, callID uint32, gid uint32)
 	responsePacket.AddFlag(nex.FlagReliable)
 
 	server.Send(responsePacket)
-	
-	rmcMessage := nex.RMCRequest{}
-	rmcMessage.SetProtocolID(0xe)
-	rmcMessage.SetCallID(0xffff0000+callID)
-	rmcMessage.SetMethodID(0x1)
 
-	hostpidString := fmt.Sprintf("%.8x",(client.PID()))
-	hostpidString = hostpidString[6:8] + hostpidString[4:6] + hostpidString[2:4] + hostpidString[0:2]
-	clientPidString := fmt.Sprintf("%.8x",(client.PID()))
-	clientPidString = clientPidString[6:8] + clientPidString[4:6] + clientPidString[2:4] + clientPidString[0:2]
-	gidString := fmt.Sprintf("%.8x",(gid))
-	gidString = gidString[6:8] + gidString[4:6] + gidString[2:4] + gidString[0:2]
+	rmcMessage := nex.NewRMCRequest()
+	rmcMessage.SetProtocolID(notifications.ProtocolID)
+	rmcMessage.SetCallID(0xffff0000 + callID)
+	rmcMessage.SetMethodID(notifications.MethodProcessNotificationEvent)
 
-	data, _ := hex.DecodeString("0017000000"+hostpidString+"A00F0000"+gidString+clientPidString+"01000001000000")
-	rmcMessage.SetParameters(data)
-	rmcMessageBytes := rmcMessage.Bytes()
+	oEvent := notifications.NewNotificationEvent()
+	oEvent.PIDSource = client.PID()
+	oEvent.Type = 4000 // Ownership changed
+	oEvent.Param1 = gid
+	oEvent.Param2 = client.PID()
 
-	for _, pid := range GetRoomPlayersHandler(gid) {
-		if(pid == 0){
+	// https://github.com/kinnay/NintendoClients/issues/101
+	unixTime := time.Now()
+	oEvent.StrParam = strconv.FormatInt(unixTime.UnixMicro(), 10)
+
+	stream := nex.NewStreamOut(server)
+	oEventBytes := oEvent.Bytes(stream)
+	rmcMessage.SetParameters(oEventBytes)
+
+	rmcRequestBytes := rmcMessage.Bytes()
+
+	for _, pid := range commonMatchMakingProtocol.GetRoomPlayersHandler(gid) {
+		if pid == 0 {
 			continue
 		}
-	
+
 		targetClient := server.FindClientFromPID(uint32(pid))
 		if targetClient != nil {
 
 			var messagePacket nex.PacketInterface
-		
-			if(server.PrudpVersion() == 0){
+
+			if server.PRUDPVersion() == 0 {
 				messagePacket, _ = nex.NewPacketV0(targetClient, nil)
 				messagePacket.SetVersion(0)
-			}else{
+			} else {
 				messagePacket, _ = nex.NewPacketV1(targetClient, nil)
 				messagePacket.SetVersion(1)
 			}
@@ -80,13 +88,13 @@ func updateSessionHost(err error, client *nex.Client, callID uint32, gid uint32)
 			messagePacket.SetSource(0xA1)
 			messagePacket.SetDestination(0xAF)
 			messagePacket.SetType(nex.DataPacket)
-			messagePacket.SetPayload(rmcMessageBytes)
+			messagePacket.SetPayload(rmcRequestBytes)
 
 			messagePacket.AddFlag(nex.FlagNeedsAck)
 			messagePacket.AddFlag(nex.FlagReliable)
 
 			server.Send(messagePacket)
-		}else{
+		} else {
 			logger.Warning("Client not found")
 		}
 	}
@@ -96,7 +104,7 @@ func updateSessionHost(err error, client *nex.Client, callID uint32, gid uint32)
 	messagePacket.SetSource(0xA1)
 	messagePacket.SetDestination(0xAF)
 	messagePacket.SetType(nex.DataPacket)
-	messagePacket.SetPayload(rmcMessageBytes)
+	messagePacket.SetPayload(rmcRequestBytes)
 
 	messagePacket.AddFlag(nex.FlagNeedsAck)
 	messagePacket.AddFlag(nex.FlagReliable)

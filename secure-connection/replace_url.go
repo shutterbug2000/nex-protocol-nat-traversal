@@ -2,7 +2,7 @@ package secureconnection
 
 import (
 	nex "github.com/PretendoNetwork/nex-go"
-	nexproto "github.com/PretendoNetwork/nex-protocols-go"
+	secure_connection "github.com/PretendoNetwork/nex-protocols-go/secure-connection"
 )
 
 func replaceURL(err error, client *nex.Client, callID uint32, oldStation *nex.StationURL, newStation *nex.StationURL) {
@@ -12,16 +12,23 @@ func replaceURL(err error, client *nex.Client, callID uint32, oldStation *nex.St
 		return
 	}
 
-	commonSecureConnectionProtocol.replaceConnectionUrlHandler(client.ConnectionID(), oldStation.EncodeToString(), newStation.EncodeToString())
+	urls := client.StationURLs()
 
-	rmcResponse := nex.NewRMCResponse(nexproto.SecureProtocolID, callID)
-	rmcResponse.SetSuccess(nexproto.SecureMethodReplaceURL, nil)
+	for i := 0; i < len(urls); i++ {
+		if urls[i] == oldStation.EncodeToString() {
+			urls[i] = newStation.EncodeToString()
+		}
+	}
+	client.SetStationURLs(urls)
+
+	rmcResponse := nex.NewRMCResponse(secure_connection.ProtocolID, callID)
+	rmcResponse.SetSuccess(secure_connection.MethodReplaceURL, nil)
 
 	rmcResponseBytes := rmcResponse.Bytes()
 
 	var responsePacket nex.PacketInterface
 
-	if server.PrudpVersion() == 0 {
+	if server.PRUDPVersion() == 0 {
 		responsePacket, _ = nex.NewPacketV0(client, nil)
 		responsePacket.SetVersion(0)
 	} else {
